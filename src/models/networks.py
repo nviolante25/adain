@@ -83,16 +83,16 @@ class StyleTranfer(nn.Module):
         self.adain = AdaIN()
         self.decoder = Decoder()
 
-    def forward(self, content_image, style_image, is_training=False):
+    def forward(self, style_image, content_image, is_training=False):
         content_embedding, _ = self.encoder(content_image)
         style_embedding, style_activations = self.encoder(style_image)
 
-        mixed_embedding = self.adain(content_embedding, style_embedding)
-        mixed_image = self.decoder(mixed_embedding)
+        target_embedding = self.adain(content_embedding, style_embedding)
+        mixed_image = self.decoder(target_embedding)
         mixed_image_embedding, mixed_activations = self.encoder(mixed_image)
 
         if is_training:
-            return mixed_embedding, mixed_image_embedding, style_activations, mixed_activations
+            return mixed_image, target_embedding, mixed_image_embedding, style_activations, mixed_activations
         return mixed_image
 
         

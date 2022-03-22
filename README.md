@@ -20,6 +20,10 @@ python src/train.py
 ```
 
 ## Visualize
+
 ```
 tensorboard --logdir .
 ```
+It includes style transfer visualisation to monitor the quality of training
+
+<img src=images/training.png height="300"> 

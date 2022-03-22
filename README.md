@@ -9,6 +9,7 @@ Implementation of [Arbitrary Style Transfer in Real-time with Adaptive Instance 
 ## Install
 
 ```
+git clone https://github.com/nviolante25/adain.git
 pip install -e . -f https://download.pytorch.org/whl/cu113/torch_stable.html
 ```
 

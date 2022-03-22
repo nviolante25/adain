@@ -1,6 +1,7 @@
 # AdaIN - PyTorch Implementation
 
-![](images/adain.png)
+
+<img src=images/sample.png height="300">    <img src=images/adain.png height="300">
 
 Implementation of [Arbitrary Style Transfer in Real-time with Adaptive Instance Normalization](https://arxiv.org/abs/1703.06868)
 

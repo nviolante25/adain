@@ -46,8 +46,8 @@ if __name__ == "__main__":
     )
 
     device = "cuda"
-    max_epochs = 100
-    batch_size = 4
+    max_epochs = 10
+    batch_size = 5
     tensorboard_grid_save_freq = 200  # num_steps before logging results
     model_save_freq = 10  # epochs before saving model
 
@@ -63,6 +63,8 @@ if __name__ == "__main__":
         "val": DataLoader(content_dataset_val, batch_size=batch_size, drop_last=True, shuffle=True),
     }
 
+    total_steps = len(content_dataloaders["train"]) * max_epochs  # content dataset is larger thant style dataset
+
     content_loss_fn = nn.MSELoss()
     model = StyleTranfer().to(device)
     optimizer = Adam(model.decoder.parameters(), lr=0.0005)
@@ -70,14 +72,13 @@ if __name__ == "__main__":
     output_dir = "/home/nviolante/workspace/adain/results"
     os.makedirs(output_dir, exist_ok=True)
 
-    for epoch in range(max_epochs):
+    pbar = tqdm(range(max_epochs))
+    for epoch in pbar:
         # Training phase
-        pbar = tqdm(
-            enumerate(zip(cycle(style_dataloaders["train"]), content_dataloaders["train"])),
-            total=len(content_dataloaders["train"])),
-        )
-        for num_step, (style_image, content_image) in pbar:
-            current_step = num_step  + epoch * len(content_dataloaders["train"])
+        for num_step, (style_image, content_image) in enumerate(
+            zip(cycle(style_dataloaders["train"]), content_dataloaders["train"])
+        ):
+            current_step = num_step + epoch * len(content_dataloaders["train"])
             optimizer.zero_grad()
             style_image = style_image[0].to(device)
             content_image = content_image[0].to(device)
@@ -92,9 +93,8 @@ if __name__ == "__main__":
             loss.backward()
             optimizer.step()
 
-            # Progress bar updates
-            pbar.set_description(f"Epoch [{epoch}/{max_epochs}]")
             pbar.set_postfix(content_loss=content_loss.item(), style_loss=style_loss.item())
+            pbar.set_description(f"Epoch [{epoch}/{max_epochs}] Iterations [{current_step}/{total_steps}]")
 
             # Tensorboard logs
             writer.add_scalar("Train/Style loss", style_loss.item(), current_step)
@@ -110,8 +110,10 @@ if __name__ == "__main__":
 
         # Evaluation phase
         with torch.no_grad():
-            for num_step, (style_image, content_image) in enumerate(zip(cycle(style_dataloaders["val"]), content_dataloaders["val"])):
-                current_step = num_step  + epoch * len(content_dataloaders["val"])
+            for num_step, (style_image, content_image) in enumerate(
+                zip(cycle(style_dataloaders["val"]), content_dataloaders["val"])
+            ):
+                current_step = num_step + epoch * len(content_dataloaders["val"])
                 style_image = style_image[0].to(device)
                 content_image = content_image[0].to(device)
 

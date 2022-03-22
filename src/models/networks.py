@@ -1,5 +1,3 @@
-from base64 import decode
-from turtle import back, forward
 import torch
 import torch.nn as nn
 from torchvision.models import vgg19

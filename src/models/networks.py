@@ -103,28 +103,3 @@ def style_loss_fn(mixed_activations, style_activations):
         style_loss += torch.norm(style_activations[0].mean(dim=(-2, -1)) - mixed_activations[0].mean(dim=(-2, -1)))
         style_loss += torch.norm(style_activations[0].std(dim=(-2, -1)) - mixed_activations[0].std(dim=(-2, -1)))
     return style_loss / num_layers
-
-
-if __name__ == "__main__":
-    content_loss_fn = nn.MSELoss()
-    batch_size = 14
-    image = torch.randn(size=(batch_size, 3, 256, 256))
-    encoder = Encoder()
-    adain = AdaIN()
-    decoder = Decoder()
-    embeddings, activations = encoder(image)
-    style_activations = [activations[i][batch_size // 2 :] for i in range(4)]
-    style_embedding = embeddings[batch_size // 2 :]
-    content_embedding = embeddings[: batch_size // 2]
-    mixed_embedding = adain(content_embedding, style_embedding)
-
-    mixed_image = decoder(mixed_embedding)
-    encoded_mixed_image, mixed_activations = encoder(mixed_image)
-
-    # loss computation
-    content_loss = content_loss_fn(mixed_embedding, encoded_mixed_image)
-    style_loss = style_loss_fn(mixed_activations, style_activations)
-
-    print()
-
-    max_epoch = 100

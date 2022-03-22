@@ -14,7 +14,7 @@ pip install -e . -f https://download.pytorch.org/whl/cu113/torch_stable.html
 ```
 
 ## Train
-
+Make sure the training data directories in `train.py` are correct
 ```
 python src/train.py
 ```

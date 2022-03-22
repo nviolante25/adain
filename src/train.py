@@ -72,12 +72,14 @@ if __name__ == "__main__":
     output_dir = "/home/nviolante/workspace/adain/results"
     os.makedirs(output_dir, exist_ok=True)
 
-    pbar = tqdm(range(max_epochs))
-    for epoch in pbar:
+    for epoch in range(max_epochs):
+        pbar = tqdm(
+            enumerate(zip(cycle(style_dataloaders["train"]), content_dataloaders["train"])),
+            total=len(content_dataloaders["train"]),
+        )
+        pbar.set_description(f"Epoch [{epoch}/{max_epochs}]")
         # Training phase
-        for num_step, (style_image, content_image) in enumerate(
-            zip(cycle(style_dataloaders["train"]), content_dataloaders["train"])
-        ):
+        for num_step, (style_image, content_image) in pbar:
             current_step = num_step + epoch * len(content_dataloaders["train"])
             optimizer.zero_grad()
             style_image = style_image[0].to(device)
@@ -94,7 +96,6 @@ if __name__ == "__main__":
             optimizer.step()
 
             pbar.set_postfix(content_loss=content_loss.item(), style_loss=style_loss.item())
-            pbar.set_description(f"Epoch [{epoch}/{max_epochs}] Iterations [{current_step}/{total_steps}]")
 
             # Tensorboard logs
             writer.add_scalar("Train/Style loss", style_loss.item(), current_step)

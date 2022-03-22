@@ -1,6 +1,8 @@
 # AdaIN - PyTorch Implementation
 
-I implemented [Arbitrary Style Transfer in Real-time with Adaptive Instance Normalization](https://arxiv.org/abs/1703.06868)
+![](images/adain.png)
+
+Implementation of [Arbitrary Style Transfer in Real-time with Adaptive Instance Normalization](https://arxiv.org/abs/1703.06868)
 
 
 ## Install
@@ -17,5 +19,5 @@ python src/train.py
 
 ## Visualize
 ```
-tensorboar --logdir .
+tensorboard --logdir .
 ```

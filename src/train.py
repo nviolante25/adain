@@ -74,9 +74,10 @@ if __name__ == "__main__":
         # Training phase
         pbar = tqdm(
             enumerate(zip(cycle(style_dataloaders["train"]), content_dataloaders["train"])),
-            total=len(content_dataset_train),
+            total=len(content_dataloaders["train"])),
         )
         for num_step, (style_image, content_image) in pbar:
+            current_step = num_step  + epoch * len(content_dataloaders["train"])
             optimizer.zero_grad()
             style_image = style_image[0].to(device)
             content_image = content_image[0].to(device)
@@ -96,22 +97,21 @@ if __name__ == "__main__":
             pbar.set_postfix(content_loss=content_loss.item(), style_loss=style_loss.item())
 
             # Tensorboard logs
-            writer.add_scalar("Train/Style loss", style_loss.item(), (num_step + 1) * (epoch + 1))
-            writer.add_scalar("Train/Content loss", content_loss.item(), (num_step + 1) * (epoch + 1))
-            writer.add_scalar("Train/Total loss", loss.item(), (num_step + 1) * (epoch + 1))
+            writer.add_scalar("Train/Style loss", style_loss.item(), current_step)
+            writer.add_scalar("Train/Content loss", content_loss.item(), current_step)
+            writer.add_scalar("Train/Total loss", loss.item(), current_step)
 
             if num_step % tensorboard_grid_save_freq == 0:
                 grid_log = create_log_grid(style_image, content_image, mixed_image)
-                writer.add_image("Train/ Step Style-Content-Mix Image", grid_log, (num_step + 1) * (epoch + 1))
+                writer.add_image("Train/ Step Style-Content-Mix Image", grid_log, current_step)
 
         grid_log = create_log_grid(style_image, content_image, mixed_image)
         writer.add_image("Train/Style-Content-Mix Image", grid_log, epoch)
 
         # Evaluation phase
         with torch.no_grad():
-            for num_step, (style_image, content_image) in enumerate(
-                zip(cycle(style_dataloaders["val"]), content_dataloaders["val"])
-            ):
+            for num_step, (style_image, content_image) in enumerate(zip(cycle(style_dataloaders["val"]), content_dataloaders["val"])):
+                current_step = num_step  + epoch * len(content_dataloaders["val"])
                 style_image = style_image[0].to(device)
                 content_image = content_image[0].to(device)
 
@@ -122,9 +122,9 @@ if __name__ == "__main__":
                 style_loss = style_loss_fn(mixed_activations, style_activations)
                 loss = content_loss + style_loss
 
-                writer.add_scalar("Val/Style loss", style_loss.item(), (num_step + 1) * (epoch + 1))
-                writer.add_scalar("Val/Content loss", content_loss.item(), (num_step + 1) * (epoch + 1))
-                writer.add_scalar("Val/Total loss", loss.item(), (num_step + 1) * (epoch + 1))
+                writer.add_scalar("Val/Style loss", style_loss.item(), current_step)
+                writer.add_scalar("Val/Content loss", content_loss.item(), current_step)
+                writer.add_scalar("Val/Total loss", loss.item(), current_step)
 
             grid_log = create_log_grid(style_image, content_image, mixed_image)
             writer.add_image("Val/Style-Content-Mix Image", grid_log, epoch)

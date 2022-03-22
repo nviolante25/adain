@@ -8,3 +8,14 @@ I implemented [Arbitrary Style Transfer in Real-time with Adaptive Instance Norm
 ```
 pip install -e . -f https://download.pytorch.org/whl/cu113/torch_stable.html
 ```
+
+## Train
+
+```
+python src/train.py
+```
+
+## Visualize
+```
+tensorboar --logdir .
+```

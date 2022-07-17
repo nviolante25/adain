@@ -33,7 +33,7 @@ class Trainer:
         train_kwargs=None,
     ):
         model.to(self.device)
-        self._state = ConfigDict(num_images=0, num_batches=0, tick=0)
+        self._state = ConfigDict(num_images=0, num_batches=0, tick=0, tick_interval=tick_interval)
 
         grid_style = next(dataloaders.style).to(self.device)
         grid_content = next(dataloaders.content).to(self.device)
@@ -41,20 +41,23 @@ class Trainer:
         done = False
         while not done:
             self.training_step(model, optimizer, dataloaders)
-            self.save_images(model, tick_interval, grid_style, grid_content)
+            if self._time_to_save():
+                self.save_progress(model, grid_style, grid_content)
             self._state.num_images += batch_size
             self._state.num_batches += 1
             done = self._state.num_images >= total_images
 
-    def save_images(self, model, tick_interval, grid_style, grid_content):
-        if self._state.num_images - (self._state.tick * tick_interval) > 0:
-            self._state.tick += 1
-            with torch.no_grad():
-                grid_mixed = model(grid_style, grid_content)
-            grid = self.make_image_grid(grid_style, grid_content, grid_mixed)
-            self.writer.add_image(
-                "Train/ Step Style-Content-Mix Image", grid, self._state.num_images
-            )
+    def _time_to_save(self):
+        return self._state.num_images - (self._state.tick * self._state.tick_interval) > 0
+
+    def save_progress(self, model, grid_style, grid_content):
+        with torch.no_grad():
+            grid_mixed = model(grid_style, grid_content)
+        grid = self.make_image_grid(grid_style, grid_content, grid_mixed)
+        self.writer.add_image(
+            "Train/ Step Style-Content-Mix Image", grid, self._state.num_images
+        )
+        self._state.tick += 1
 
     def training_step(self, model, optimizer, dataloaders):
         optimizer.zero_grad()

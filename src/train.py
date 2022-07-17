@@ -18,9 +18,9 @@ class Trainer:
         device="cuda",
     ):
         self.device = device
-        output_dir = self.get_outdir(dest)
-        os.makedirs(output_dir)
-        self.writer = SummaryWriter(output_dir)
+        self.output_dir = self.get_outdir(dest)
+        os.makedirs(self.output_dir)
+        self.writer = SummaryWriter(self.output_dir)
 
     def fit(
         self,
@@ -33,31 +33,59 @@ class Trainer:
         train_kwargs=None,
     ):
         model.to(self.device)
-        self._state = ConfigDict(num_images=0, num_batches=0, tick=0, snapshot_interval=snapshot_interval)
+        self._state = ConfigDict(
+            num_images=0,
+            num_batches=0,
+            tick=0,
+            snapshot_interval=snapshot_interval,
+            total_images=total_images,
+        )
 
         grid_style = next(dataloaders.style).to(self.device)
         grid_content = next(dataloaders.content).to(self.device)
 
         done = False
         while not done:
-            self.training_step(model, optimizer, dataloaders)
+            losses = self.training_step(model, optimizer, dataloaders)
+            self.save_losses(losses)
             if self._time_to_save():
-                self.save_progress(model, grid_style, grid_content)
+                self.save_snapshot(model, optimizer)
+                self.save_grid(model, grid_style, grid_content)
+                self.print_progress(losses)
+                self._state.tick += 1
             self._state.num_images += batch_size
             self._state.num_batches += 1
             done = self._state.num_images >= total_images
 
     def _time_to_save(self):
-        return self._state.num_images - (self._state.tick * self._state.snapshot_interval) > 0
+        return (
+            self._state.num_images - (self._state.tick * self._state.snapshot_interval)
+            > 0
+        )
 
-    def save_progress(self, model, grid_style, grid_content):
-        with torch.no_grad():
-            grid_mixed = model(grid_style, grid_content)
+    def print_progress(self, losses):
+        tick = self._state.tick
+        print(f"tick {tick}: style {losses.style_loss}, content {losses.content_loss}")
+
+    def save_snapshot(self, model, optimizer):
+        checkpoint = {
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "state": self._state,
+        }
+        tick = self._state.tick
+        output_path = os.path.join(
+            self.output_dir, f"snapshot-{str(tick).zfill(8)}.pth"
+        )
+        torch.save(checkpoint, output_path)
+
+    @torch.no_grad()
+    def save_grid(self, model, grid_style, grid_content):
+        grid_mixed = model(grid_style, grid_content)
         grid = self.make_image_grid(grid_style, grid_content, grid_mixed)
         self.writer.add_image(
             "Train/ Step Style-Content-Mix Image", grid, self._state.num_images
         )
-        self._state.tick += 1
 
     def training_step(self, model, optimizer, dataloaders):
         optimizer.zero_grad()
@@ -79,14 +107,18 @@ class Trainer:
         loss.backward()
         optimizer.step()
 
-        # Tensorboard logs
-        self.writer.add_scalar(
-            "Train/Loss/Style", style_loss.item(), self._state.num_images
+        result = ConfigDict(
+            loss=loss.item(),
+            style_loss=style_loss.item(),
+            content_loss=content_loss.item(),
         )
-        self.writer.add_scalar(
-            "Train/Loss/Content", content_loss.item(), self._state.num_images
-        )
-        self.writer.add_scalar("Train/Loss/Total", loss.item(), self._state.num_images)
+        return result
+
+    def save_losses(self, losses):
+        step = self._state.num_images
+        self.writer.add_scalar("Train/Loss/Style", losses.style_loss, step)
+        self.writer.add_scalar("Train/Loss/Content", losses.content_loss, step)
+        self.writer.add_scalar("Train/Loss/Total", losses.loss, step)
 
     @staticmethod
     def make_image_grid(style_image, content_image, mixed_image):
@@ -106,19 +138,17 @@ class Trainer:
 
 @click.command()
 @click.option("--seed", type=int, default=0)
-@click.option("--source-content", type=str, default="/home/nviolante/datasets/style")
-@click.option("--source-style", type=str, default="/home/nviolante/datasets/content")
-@click.option(
-    "--dest", type=str, default="/home/nviolante/workspace/adain/training-runs"
-)
-def main(seed, source_content, source_style, dest):
+@click.option("--source-content")
+@click.option("--source-style")
+@click.option("--dest", type=str)
+@click.option("--batch-size", type=int)
+def main(seed, source_content, source_style, dest, batch_size):
     torch.manual_seed(seed)
 
     transform = Transform(Compose([ToTensor(), Resize(512), RandomCrop(256)]))
     style_dataset = ImageDataset(source_style, transform)
     content_dataset = ImageDataset(source_content, transform)
 
-    batch_size = 5
     style_dataloader = iter(
         DataLoader(
             style_dataset, batch_size, sampler=InfiniteSampler(style_dataset, seed)

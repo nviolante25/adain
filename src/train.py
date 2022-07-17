@@ -1,136 +1,173 @@
 import os
-from tqdm import tqdm
-from itertools import cycle
-from PIL import ImageFile
+import click
 import torch
-import torch.nn as nn
-from torch.multiprocessing import set_sharing_strategy
-from torch.optim import Adam
+from timm.optim import Lamb
 from torch.utils.tensorboard import SummaryWriter
-from torch.utils.data import DataLoader, Subset
-from torchvision.datasets import ImageFolder
+from torch.utils.data import DataLoader
 from torchvision.utils import make_grid
 from torchvision.transforms import ToTensor, RandomCrop, Compose, Resize
 
 from models.networks import StyleTranfer
-from models.networks import style_loss_fn
+from dataset.dataset import ImageDataset, Transform, InfiniteSampler, ConfigDict
 
 
-def create_log_grid(style_image, content_image, mixed_image):
-    grid_style = make_grid(style_image.cpu())
-    grid_content = make_grid(content_image.cpu())
-    grid_mix = make_grid(torch.clip(mixed_image.cpu(), 0, 1))
-    grid_log = torch.concat((grid_style, grid_content, grid_mix), dim=1)
-    return grid_log
+class Trainer:
+    def __init__(
+        self,
+        dest,
+        device="cuda",
+    ):
+        self.device = device
+        self.output_dir = self.get_outdir(dest)
+        os.makedirs(self.output_dir)
+        self.writer = SummaryWriter(self.output_dir)
+
+    def fit(
+        self,
+        model,
+        optimizer,
+        dataloaders,
+        batch_size,
+        snapshot_interval=1000,
+        total_images=100e3,
+        train_kwargs=None,
+    ):
+        model.to(self.device)
+        self._state = ConfigDict(
+            num_images=0,
+            num_batches=0,
+            tick=0,
+            snapshot_interval=snapshot_interval,
+            total_images=total_images,
+        )
+
+        grid_style = next(dataloaders.style).to(self.device)
+        grid_content = next(dataloaders.content).to(self.device)
+
+        done = False
+        while not done:
+            losses = self.training_step(model, optimizer, dataloaders)
+            self.save_losses(losses)
+            if self._time_to_save():
+                self.save_snapshot(model, optimizer)
+                self.save_grid(model, grid_style, grid_content)
+                self.print_progress(losses)
+                self._state.tick += 1
+            self._state.num_images += batch_size
+            self._state.num_batches += 1
+            done = self._state.num_images >= total_images
+
+    def _time_to_save(self):
+        return (
+            self._state.num_images - (self._state.tick * self._state.snapshot_interval)
+            > 0
+        )
+
+    def print_progress(self, losses):
+        tick = self._state.tick
+        print(f"tick {tick}: style {losses.style_loss}, content {losses.content_loss}")
+
+    def save_snapshot(self, model, optimizer):
+        checkpoint = {
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "state": self._state,
+        }
+        tick = self._state.tick
+        output_path = os.path.join(
+            self.output_dir, f"snapshot-{str(tick).zfill(8)}.pth"
+        )
+        torch.save(checkpoint, output_path)
+
+    @torch.no_grad()
+    def save_grid(self, model, grid_style, grid_content):
+        grid_mixed = model(grid_style, grid_content)
+        grid = self.make_image_grid(grid_style, grid_content, grid_mixed)
+        self.writer.add_image(
+            "Train/ Step Style-Content-Mix Image", grid, self._state.num_images
+        )
+
+    def training_step(self, model, optimizer, dataloaders):
+        optimizer.zero_grad()
+        style_image = next(dataloaders.style).to(self.device)
+        content_image = next(dataloaders.content).to(self.device)
+
+        (
+            _,
+            target_embedding,
+            mixed_image_embedding,
+            style_activations,
+            mixed_activations,
+        ) = model(style_image, content_image, is_training=True)
+
+        content_loss = model.content_loss_fn(target_embedding, mixed_image_embedding)
+        style_loss = model.style_loss_fn(mixed_activations, style_activations)
+        loss = content_loss + style_loss
+
+        loss.backward()
+        optimizer.step()
+
+        result = ConfigDict(
+            loss=loss.item(),
+            style_loss=style_loss.item(),
+            content_loss=content_loss.item(),
+        )
+        return result
+
+    def save_losses(self, losses):
+        step = self._state.num_images
+        self.writer.add_scalar("Train/Loss/Style", losses.style_loss, step)
+        self.writer.add_scalar("Train/Loss/Content", losses.content_loss, step)
+        self.writer.add_scalar("Train/Loss/Total", losses.loss, step)
+
+    @staticmethod
+    def make_image_grid(style_image, content_image, mixed_image):
+        grid_style = make_grid(style_image.cpu())
+        grid_content = make_grid(content_image.cpu())
+        grid_mix = make_grid(torch.clip(mixed_image.cpu(), 0, 1))
+        grid = torch.concat((grid_style, grid_content, grid_mix), dim=1)
+        return grid
+
+    @staticmethod
+    def get_outdir(dest):
+        os.makedirs(dest, exist_ok=True)
+        num = len(os.listdir(dest))
+        output_dir = os.path.join(dest, f"{str(num).zfill(4)}-adain")
+        return output_dir
 
 
-def split(dataset, percentage=0.95):
-    train_size = int(percentage * len(dataset))
-    train_dataset = Subset(dataset, list(range(train_size)))
-    val_dataset = Subset(dataset, list(range(train_size, len(dataset))))
-    return train_dataset, val_dataset
+@click.command()
+@click.option("--seed", type=int, default=0)
+@click.option("--source-content")
+@click.option("--source-style")
+@click.option("--dest", type=str)
+@click.option("--batch-size", type=int)
+def main(seed, source_content, source_style, dest, batch_size):
+    torch.manual_seed(seed)
+
+    transform = Transform(Compose([ToTensor(), Resize(512), RandomCrop(256)]))
+    style_dataset = ImageDataset(source_style, transform)
+    content_dataset = ImageDataset(source_content, transform)
+
+    style_dataloader = iter(
+        DataLoader(
+            style_dataset, batch_size, sampler=InfiniteSampler(style_dataset, seed)
+        )
+    )
+    content_dataloader = iter(
+        DataLoader(
+            content_dataset, batch_size, sampler=InfiniteSampler(content_dataset, seed)
+        )
+    )
+
+    dataloaders = ConfigDict(style=style_dataloader, content=content_dataloader)
+
+    model = StyleTranfer()
+    optimizer = Lamb(model.decoder.parameters(), lr=0.005)
+
+    trainer = Trainer(dest)
+    trainer.fit(model, optimizer, dataloaders, batch_size)
 
 
 if __name__ == "__main__":
-    ImageFile.LOAD_TRUNCATED_IMAGES = True
-    set_sharing_strategy("file_system")
-
-    # Dataset
-    style_dataset = ImageFolder(
-        "/home/nviolante/datasets/style_transfer",
-        transform=Compose([Resize(512), RandomCrop(256), ToTensor()]),
-    )
-    content_dataset = ImageFolder(
-        "/home/nviolante/datasets/coco",
-        transform=Compose([Resize(512), RandomCrop(256), ToTensor()]),
-    )
-
-    device = "cuda"
-    max_epochs = 10
-    batch_size = 5
-    tensorboard_grid_save_freq = 200  # num_steps before logging results
-    model_save_freq = 10  # epochs before saving model
-
-    # For overfit use Subset(style_dataset_train, [5917]) and Subset(content_dataset_train, [5])
-    style_dataset_train, style_dataset_val = split(style_dataset)
-    style_dataloaders = {
-        "train": DataLoader(style_dataset_train, batch_size=batch_size, drop_last=True, shuffle=True),
-        "val": DataLoader(style_dataset_val, batch_size=batch_size, drop_last=True, shuffle=True),
-    }
-    content_dataset_train, content_dataset_val = split(content_dataset)
-    content_dataloaders = {
-        "train": DataLoader(content_dataset_train, batch_size=batch_size, drop_last=True, shuffle=True),
-        "val": DataLoader(content_dataset_val, batch_size=batch_size, drop_last=True, shuffle=True),
-    }
-
-    total_steps = len(content_dataloaders["train"]) * max_epochs  # content dataset is larger thant style dataset
-
-    content_loss_fn = nn.MSELoss()
-    model = StyleTranfer().to(device)
-    optimizer = Adam(model.decoder.parameters(), lr=0.0005)
-    writer = SummaryWriter()
-    output_dir = "/home/nviolante/workspace/adain/results"
-    os.makedirs(output_dir, exist_ok=True)
-
-    for epoch in range(max_epochs):
-        pbar = tqdm(
-            enumerate(zip(cycle(style_dataloaders["train"]), content_dataloaders["train"])),
-            total=len(content_dataloaders["train"]),
-        )
-        pbar.set_description(f"Epoch [{epoch}/{max_epochs}]")
-        # Training phase
-        for num_step, (style_image, content_image) in pbar:
-            current_step = num_step + epoch * len(content_dataloaders["train"])
-            optimizer.zero_grad()
-            style_image = style_image[0].to(device)
-            content_image = content_image[0].to(device)
-
-            mixed_image, target_embedding, mixed_image_embedding, style_activations, mixed_activations = model(
-                style_image, content_image, is_training=True
-            )
-            content_loss = content_loss_fn(target_embedding, mixed_image_embedding)
-            style_loss = style_loss_fn(mixed_activations, style_activations)
-            loss = content_loss + style_loss
-
-            loss.backward()
-            optimizer.step()
-
-            pbar.set_postfix(content_loss=content_loss.item(), style_loss=style_loss.item())
-
-            # Tensorboard logs
-            writer.add_scalar("Train/Style loss", style_loss.item(), current_step)
-            writer.add_scalar("Train/Content loss", content_loss.item(), current_step)
-            writer.add_scalar("Train/Total loss", loss.item(), current_step)
-
-            if num_step % tensorboard_grid_save_freq == 0:
-                grid_log = create_log_grid(style_image, content_image, mixed_image)
-                writer.add_image("Train/ Step Style-Content-Mix Image", grid_log, current_step)
-
-        grid_log = create_log_grid(style_image, content_image, mixed_image)
-        writer.add_image("Train/Style-Content-Mix Image", grid_log, epoch)
-
-        # Evaluation phase
-        with torch.no_grad():
-            for num_step, (style_image, content_image) in enumerate(
-                zip(cycle(style_dataloaders["val"]), content_dataloaders["val"])
-            ):
-                current_step = num_step + epoch * len(content_dataloaders["val"])
-                style_image = style_image[0].to(device)
-                content_image = content_image[0].to(device)
-
-                mixed_image, target_embedding, mixed_image_embedding, style_activations, mixed_activations = model(
-                    style_image, content_image, is_training=True
-                )
-                content_loss = content_loss_fn(target_embedding, mixed_image_embedding)
-                style_loss = style_loss_fn(mixed_activations, style_activations)
-                loss = content_loss + style_loss
-
-                writer.add_scalar("Val/Style loss", style_loss.item(), current_step)
-                writer.add_scalar("Val/Content loss", content_loss.item(), current_step)
-                writer.add_scalar("Val/Total loss", loss.item(), current_step)
-
-            grid_log = create_log_grid(style_image, content_image, mixed_image)
-            writer.add_image("Val/Style-Content-Mix Image", grid_log, epoch)
-
-        if epoch % model_save_freq == 0 and epoch > 0:
-            torch.save(model.state_dict(), os.path.join(output_dir, f"model_{epoch}.pt"))
+    main()

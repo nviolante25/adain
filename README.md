@@ -14,16 +14,16 @@ pip install -e . -f https://download.pytorch.org/whl/cu113/torch_stable.html
 ```
 
 ## Train
-Make sure the training data directories in `train.py` are correct
+
 ```
-python src/train.py
+python src/train.py --source-style=<style-dataset-path> --source-content=<content-dataset-path> --dest=<output-path>
 ```
 
 ## Visualize
 
 ```
-tensorboard --logdir .
+tensorboard --logdir=<output-path>
 ```
-It includes style transfer visualisation to monitor the quality of training
+Includes style transfer visualisation to monitor the quality of training
 
 <img src=images/training.png height="300"> 

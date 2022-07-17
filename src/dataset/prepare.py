@@ -8,9 +8,9 @@ from tqdm import tqdm
 import click
 
 
-click.command()
-click.option("--source", type=str)
-click.option("--dest", type=str)
+@click.command()
+@click.option("--source", type=str, required=True)
+@click.option("--dest", type=str, required=True)
 
 
 def main(source, dest):

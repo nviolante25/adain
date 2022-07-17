@@ -28,12 +28,12 @@ class Trainer:
         optimizer,
         dataloaders,
         batch_size,
-        tick_interval=1000,
+        snapshot_interval=1000,
         total_images=100e3,
         train_kwargs=None,
     ):
         model.to(self.device)
-        self._state = ConfigDict(num_images=0, num_batches=0, tick=0, tick_interval=tick_interval)
+        self._state = ConfigDict(num_images=0, num_batches=0, tick=0, snapshot_interval=snapshot_interval)
 
         grid_style = next(dataloaders.style).to(self.device)
         grid_content = next(dataloaders.content).to(self.device)
@@ -48,7 +48,7 @@ class Trainer:
             done = self._state.num_images >= total_images
 
     def _time_to_save(self):
-        return self._state.num_images - (self._state.tick * self._state.tick_interval) > 0
+        return self._state.num_images - (self._state.tick * self._state.snapshot_interval) > 0
 
     def save_progress(self, model, grid_style, grid_content):
         with torch.no_grad():

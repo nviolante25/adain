@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision.models import vgg19
 
 
@@ -79,7 +80,7 @@ class StyleTranfer(nn.Module):
         super().__init__()
         self.encoder = Encoder()
         self.encoder.eval()
-        self.adain = AdaIN()
+        self.adain = AdaIN().eval()
         self.decoder = Decoder()
 
     def forward(self, style_image, content_image, is_training=False):
@@ -94,12 +95,16 @@ class StyleTranfer(nn.Module):
             return mixed_image, target_embedding, mixed_image_embedding, style_activations, mixed_activations
         return mixed_image
 
+    @staticmethod
+    def style_loss_fn(mixed_activations, style_activations):
+        assert len(style_activations) == len(mixed_activations)
+        style_loss = 0
+        num_layers = len(mixed_activations)
+        for i in range(num_layers):
+            style_loss += torch.norm(style_activations[0].mean(dim=(-2, -1)) - mixed_activations[0].mean(dim=(-2, -1)))
+            style_loss += torch.norm(style_activations[0].std(dim=(-2, -1)) - mixed_activations[0].std(dim=(-2, -1)))
+        return style_loss / num_layers
 
-def style_loss_fn(mixed_activations, style_activations):
-    assert len(style_activations) == len(mixed_activations)
-    style_loss = 0
-    num_layers = len(mixed_activations)
-    for i in range(num_layers):
-        style_loss += torch.norm(style_activations[0].mean(dim=(-2, -1)) - mixed_activations[0].mean(dim=(-2, -1)))
-        style_loss += torch.norm(style_activations[0].std(dim=(-2, -1)) - mixed_activations[0].std(dim=(-2, -1)))
-    return style_loss / num_layers
+    @staticmethod
+    def content_loss_fn(prediction, target):
+        return F.mse_loss(prediction, target)

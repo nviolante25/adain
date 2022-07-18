@@ -28,8 +28,9 @@ class Trainer:
         optimizer,
         dataloaders,
         batch_size,
-        snapshot_interval=1000,
-        total_images=100e3,
+        snapshot_interval=10000,
+        loss_interval=500,
+        total_images=100e6,
         train_kwargs=None,
     ):
         model.to(self.device)
@@ -37,7 +38,9 @@ class Trainer:
             num_images=0,
             num_batches=0,
             tick=0,
+            tick_loss=0,
             snapshot_interval=snapshot_interval,
+            loss_interval=loss_interval,
             total_images=total_images,
         )
 
@@ -47,24 +50,34 @@ class Trainer:
         done = False
         while not done:
             losses = self.training_step(model, optimizer, dataloaders)
-            self.save_losses(losses)
-            if self._time_to_save():
+
+            if self._time_to_save_losses():
+                self.save_losses(losses)
+                self.print_progress(losses)
+                self._state.tick_loss += 1
+
+            if self._time_to_save_images():
                 self.save_snapshot(model, optimizer)
                 self.save_grid(model, grid_style, grid_content)
-                self.print_progress(losses)
                 self._state.tick += 1
             self._state.num_images += batch_size
             self._state.num_batches += 1
             done = self._state.num_images >= total_images
 
-    def _time_to_save(self):
+    def _time_to_save_losses(self):
+        return (
+            self._state.num_images - (self._state.tick_loss * self._state.loss_interval)
+            > 0
+        )
+
+    def _time_to_save_images(self):
         return (
             self._state.num_images - (self._state.tick * self._state.snapshot_interval)
             > 0
         )
 
     def print_progress(self, losses):
-        tick = self._state.tick
+        tick = self._state.tick_loss
         print(f"tick {tick}: style {losses.style_loss}, content {losses.content_loss}")
 
     def save_snapshot(self, model, optimizer):

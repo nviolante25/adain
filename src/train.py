@@ -6,15 +6,27 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 from torchvision.utils import make_grid
 from torchvision.transforms import ToTensor, RandomCrop, Compose, Resize
+from torchvision.transforms.functional import to_pil_image
 
 from models.networks import StyleTranfer
-from dataset.dataset import ImageDataset, Transform, InfiniteSampler, ConfigDict
+from dataset.dataset import ImageDataset, Transform, ConfigDict
+from tqdm import tqdm
 
+def cycle(dataloader):
+    while True:
+        for data in dataloader:
+            yield data
 
 class Trainer:
     def __init__(
-        self,
+        self, 
+        model, 
+        optimizer, 
+        style_dataloader, 
+        content_dataloader, 
+        batch_size, 
         dest,
+        total_nimg, 
         device="cuda",
     ):
         self.device = device
@@ -22,103 +34,61 @@ class Trainer:
         os.makedirs(self.output_dir)
         self.writer = SummaryWriter(self.output_dir)
 
-    def fit(
-        self,
-        model,
-        optimizer,
-        dataloaders,
-        batch_size,
-        snapshot_interval=10000,
-        loss_interval=500,
-        total_images=100e6,
-        train_kwargs=None,
-    ):
-        model.to(self.device)
-        self._state = ConfigDict(
-            num_images=0,
-            num_batches=0,
-            tick=0,
-            tick_loss=0,
-            snapshot_interval=snapshot_interval,
-            loss_interval=loss_interval,
-            total_images=total_images,
-        )
+        self.model = model.to(device)
+        self.optimizer = optimizer
+        self.style_dataloader = style_dataloader
+        self.content_dataloader = content_dataloader
+        self.batch_size = batch_size
+        self.total_nimg = total_nimg
+        self.snapshot_kimg = 10
 
-        grid_style = next(dataloaders.style).to(self.device)
-        grid_content = next(dataloaders.content).to(self.device)
+    def fit(self):
+        grid_style = next(self.style_dataloader).to(self.device)
+        grid_content = next(self.content_dataloader).to(self.device)
 
-        done = False
-        while not done:
-            losses = self.training_step(model, optimizer, dataloaders)
+        cur_nimg = 0
+        cur_tick = 0
+        self.model.train()
+        print("Launching training...")
+        with tqdm(initial=0, total=int(self.total_nimg)) as pbar:
+            while cur_nimg < self.total_nimg:
+                losses = self.train_step()
+                cur_nimg += self.batch_size
+                cur_tick += 1
+                self.save_losses(losses, cur_nimg)
 
-            if self._time_to_save_losses():
-                self.save_losses(losses)
-                self.print_progress(losses)
-                self._state.tick_loss += 1
+                if cur_tick % (self.snapshot_kimg * 1000) == 0:
+                    self.save_grid(grid_style, grid_content, cur_nimg)
+                    self.save_snapshot(cur_nimg)
+                pbar.update(self.batch_size)
 
-            if self._time_to_save_images():
-                self.save_snapshot(model, optimizer)
-                self.save_grid(model, grid_style, grid_content)
-                self._state.tick += 1
-            self._state.num_images += batch_size
-            self._state.num_batches += 1
-            done = self._state.num_images >= total_images
-
-    def _time_to_save_losses(self):
-        return (
-            self._state.num_images - (self._state.tick_loss * self._state.loss_interval)
-            > 0
-        )
-
-    def _time_to_save_images(self):
-        return (
-            self._state.num_images - (self._state.tick * self._state.snapshot_interval)
-            > 0
-        )
-
-    def print_progress(self, losses):
-        tick = self._state.tick_loss
-        print(f"tick {tick}: style {losses.style_loss}, content {losses.content_loss}")
-
-    def save_snapshot(self, model, optimizer):
+    def save_snapshot(self, cur_nimg):
         checkpoint = {
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "state": self._state,
+            "model": self.model.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
         }
-        tick = self._state.tick
-        output_path = os.path.join(
-            self.output_dir, f"snapshot-{str(tick).zfill(8)}.pth"
-        )
+        output_path = os.path.join(self.output_dir, f"snapshot-{str(cur_nimg // 1000).zfill(8)}.pth")
         torch.save(checkpoint, output_path)
 
     @torch.no_grad()
-    def save_grid(self, model, grid_style, grid_content):
-        grid_mixed = model(grid_style, grid_content)
+    def save_grid(self, grid_style, grid_content, cur_nimg):
+        grid_mixed = self.model(grid_style, grid_content)
         grid = self.make_image_grid(grid_style, grid_content, grid_mixed)
-        self.writer.add_image(
-            "Train/ Step Style-Content-Mix Image", grid, self._state.num_images
-        )
+        to_pil_image(grid).save(os.path.join(self.output_dir, f"img_{str(cur_nimg // 1000).zfill(8)}.png"))
 
-    def training_step(self, model, optimizer, dataloaders):
-        optimizer.zero_grad()
-        style_image = next(dataloaders.style).to(self.device)
-        content_image = next(dataloaders.content).to(self.device)
+    def train_step(self):
+        style_image = next(self.style_dataloader).to(self.device)
+        content_image = next(self.content_dataloader).to(self.device)
 
-        (
-            _,
-            target_embedding,
-            mixed_image_embedding,
-            style_activations,
-            mixed_activations,
-        ) = model(style_image, content_image, is_training=True)
+        _, target_embedding, mixed_image_embedding, style_activations, mixed_activations = self.model(style_image, content_image, is_training=True)
 
-        content_loss = model.content_loss_fn(target_embedding, mixed_image_embedding)
-        style_loss = model.style_loss_fn(mixed_activations, style_activations)
+        content_loss = self.model.content_loss_fn(target_embedding, mixed_image_embedding)
+        style_loss = self.model.style_loss_fn(mixed_activations, style_activations)
         loss = content_loss + style_loss
 
+        self.optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
+        self.optimizer.step()
 
         result = ConfigDict(
             loss=loss.item(),
@@ -127,11 +97,10 @@ class Trainer:
         )
         return result
 
-    def save_losses(self, losses):
-        step = self._state.num_images
-        self.writer.add_scalar("Train/Loss/Style", losses.style_loss, step)
-        self.writer.add_scalar("Train/Loss/Content", losses.content_loss, step)
-        self.writer.add_scalar("Train/Loss/Total", losses.loss, step)
+    def save_losses(self, losses, cur_nimg):
+        self.writer.add_scalar("Train/Loss/Style", losses.style_loss, cur_nimg)
+        self.writer.add_scalar("Train/Loss/Content", losses.content_loss, cur_nimg)
+        self.writer.add_scalar("Train/Loss/Total", losses.loss, cur_nimg)
 
     @staticmethod
     def make_image_grid(style_image, content_image, mixed_image):
@@ -150,11 +119,11 @@ class Trainer:
 
 
 @click.command()
-@click.option("--seed", type=int, default=0)
+@click.option("--seed",              type=int, default=0)
 @click.option("--source-content")
 @click.option("--source-style")
-@click.option("--dest", type=str)
-@click.option("--batch-size", type=int)
+@click.option("--dest",              type=str)
+@click.option("--batch-size",        type=int)
 def main(seed, source_content, source_style, dest, batch_size):
     torch.manual_seed(seed)
 
@@ -162,24 +131,13 @@ def main(seed, source_content, source_style, dest, batch_size):
     style_dataset = ImageDataset(source_style, transform)
     content_dataset = ImageDataset(source_content, transform)
 
-    style_dataloader = iter(
-        DataLoader(
-            style_dataset, batch_size, sampler=InfiniteSampler(style_dataset, seed)
-        )
-    )
-    content_dataloader = iter(
-        DataLoader(
-            content_dataset, batch_size, sampler=InfiniteSampler(content_dataset, seed)
-        )
-    )
-
-    dataloaders = ConfigDict(style=style_dataloader, content=content_dataloader)
-
+    style_dataloader = cycle(DataLoader(style_dataset, batch_size, shuffle=True, drop_last=True))
+    content_dataloader = cycle(DataLoader(content_dataset, batch_size, shuffle=True, drop_last=True))
     model = StyleTranfer()
     optimizer = Lamb(model.decoder.parameters(), lr=0.005)
 
-    trainer = Trainer(dest)
-    trainer.fit(model, optimizer, dataloaders, batch_size)
+    trainer = Trainer(model, optimizer, style_dataloader, content_dataloader, batch_size, dest, total_nimg=int(500e3))
+    trainer.fit()
 
 
 if __name__ == "__main__":

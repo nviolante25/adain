@@ -33,11 +33,11 @@ class Transform:
         self._transform = transform
         self._augmentation = augmentation
 
-    def __call__(self, image_array):
-        image_tensor = self._transform(image_array)
+    def __call__(self, pil_image):
+        tensor_image = self._transform(pil_image)
         if self._augmentation is not None:
-            image_tensor = self._augmentation(image_tensor)
-        return image_tensor
+            tensor_image = self._augmentation(tensor_image)
+        return tensor_image
 
 
 class ImageDataset(Dataset):
@@ -66,7 +66,7 @@ class ImageDataset(Dataset):
         return len(self._image_paths)
 
     def __getitem__(self, idx):
-        image_array = np.array(Image.open(self._image_paths[idx]))
+        image_array = Image.open(self._image_paths[idx])
         image_tensor = self._transform(image_array)
         return image_tensor
 
@@ -86,21 +86,3 @@ class ImageDataset(Dataset):
 
     def __str__(self):
         return self.__repr__()
-
-
-class InfiniteSampler(Sampler):
-    def __init__(self, dataset, seed) -> None:
-        super().__init__(dataset)
-        self.seed = seed
-        self.dataset = dataset
-
-    def __iter__(self):
-        rng = np.random.default_rng(self.seed)
-        indices = np.arange(len(self.dataset))
-        rng.shuffle(indices)
-
-        i = 0
-        while True:
-            idx = i % len(indices)
-            yield indices[idx]
-            i += 1

@@ -79,8 +79,7 @@ class StyleTranfer(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.encoder = Encoder()
-        self.encoder.eval()
-        self.adain = AdaIN().eval()
+        self.adain = AdaIN()
         self.decoder = Decoder()
 
     def forward(self, style_image, content_image, is_training=False):
